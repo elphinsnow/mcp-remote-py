@@ -117,7 +117,18 @@ class SseRemoteTransport:
         self.onclose: Optional[callable[[], None]] = None
 
         self._closed = False
+        self._started = asyncio.Event()
         self._endpoint_ready = asyncio.Event()
+        self._onclose_called = False
+
+        # Some modern MCP servers do not emit an explicit SSE `endpoint` event.
+        # In that case, the SDK typically POSTs back to the same URL.
+        self._endpoint_wait_timeout_s = 2.0
+
+    async def wait_ready(self) -> None:
+        """Wait until the SSE connection is established (HTTP 2xx + stream opened)."""
+
+        await self._started.wait()
 
     @property
     def endpoint(self) -> Optional[str]:
@@ -135,6 +146,9 @@ class SseRemoteTransport:
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=None),
             )
             self._resp.raise_for_status()
+
+            # Connection is open; allow send() to proceed.
+            self._started.set()
 
             async for event in iter_sse_events(self._resp.content):
                 if self._closed:
@@ -169,6 +183,18 @@ class SseRemoteTransport:
         finally:
             await self.close()
 
+    async def _ensure_endpoint(self) -> None:
+        if self._endpoint_ready.is_set():
+            return
+
+        try:
+            await asyncio.wait_for(self._endpoint_ready.wait(), timeout=self._endpoint_wait_timeout_s)
+        except asyncio.TimeoutError:
+            # Fall back to POSTing to the base URL (common SDK behavior).
+            self._endpoint = self._base_url
+            self._endpoint_ready.set()
+            log("No SSE endpoint event; defaulting POST endpoint to base URL:", self._endpoint)
+
     def _set_endpoint(self, endpoint_value: str) -> None:
         # Endpoint may be relative. Join against base.
         resolved = urljoin(self._base_url, endpoint_value)
@@ -184,10 +210,14 @@ class SseRemoteTransport:
     async def send(self, message: JsonObject) -> None:
         if self._closed:
             raise RuntimeError("Transport is closed")
+
+        # Proxy starts start() concurrently with stdin pumping; avoid a race.
+        await self._started.wait()
+
         if not self._session:
             raise RuntimeError("Transport not started")
 
-        await self._endpoint_ready.wait()
+        await self._ensure_endpoint()
         if not self._endpoint:
             raise RuntimeError("Not connected (no endpoint)")
 
@@ -212,6 +242,10 @@ class SseRemoteTransport:
             return
         self._closed = True
 
+        # Unblock any waiters.
+        self._started.set()
+        self._endpoint_ready.set()
+
         try:
             if self._resp is not None:
                 self._resp.close()
@@ -224,5 +258,6 @@ class SseRemoteTransport:
         finally:
             self._session = None
 
-        if self.onclose:
+        if self.onclose and not self._onclose_called:
+            self._onclose_called = True
             self.onclose()

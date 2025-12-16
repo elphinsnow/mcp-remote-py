@@ -4,17 +4,21 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from .logging_utils import log
-from .sse_transport import SseRemoteTransport
+from .remote_transport import RemoteTransport, TransportStrategy
 from .stdio_jsonl import iter_stdin_messages, write_stdout_message
 
 
 JsonObject = Dict[str, Any]
 
 
-async def run_proxy(server_url: str, headers: Optional[dict[str, str]] = None) -> None:
-    """Run a minimal STDIO <-> remote SSE proxy."""
+async def run_proxy(
+    server_url: str,
+    headers: Optional[dict[str, str]] = None,
+    transport: TransportStrategy = "http-first",
+) -> None:
+    """Run a minimal STDIO <-> remote proxy."""
 
-    remote = SseRemoteTransport(server_url, headers=headers)
+    remote = RemoteTransport(server_url, headers=headers, transport=transport)
 
     remote_closed = asyncio.Event()
     local_eof = asyncio.Event()
@@ -39,6 +43,8 @@ async def run_proxy(server_url: str, headers: Optional[dict[str, str]] = None) -
     remote.onclose = on_remote_close
     remote.onerror = on_remote_error
 
+    await remote.start_background()
+
     async def pump_remote_to_local() -> None:
         while True:
             if remote_closed.is_set() and remote_to_local_queue.empty():
@@ -57,15 +63,12 @@ async def run_proxy(server_url: str, headers: Optional[dict[str, str]] = None) -
         finally:
             local_eof.set()
 
-    async def run_remote() -> None:
-        await remote.start()
-
     log("Starting minimal proxy")
-    log("Remote SSE URL:", server_url)
+    log("Remote URL:", server_url)
+    log("Transport strategy:", transport)
 
-    # Start remote reader + both pumps.
+    # Start both pumps.
     tasks = [
-        asyncio.create_task(run_remote(), name="remote.start"),
         asyncio.create_task(pump_remote_to_local(), name="pump.remote_to_local"),
         asyncio.create_task(pump_local_to_remote(), name="pump.local_to_remote"),
     ]

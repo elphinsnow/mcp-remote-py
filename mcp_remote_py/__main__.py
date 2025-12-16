@@ -21,6 +21,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=[],
         help="Custom header to send to remote (repeatable), format: 'Name: value'",
     )
+    p.add_argument(
+        "--transport",
+        default="http-first",
+        choices=["sse-only", "http-only", "sse-first", "http-first"],
+        help="Transport strategy (default: http-first)",
+    )
     return p
 
 
@@ -37,7 +43,7 @@ def main() -> None:
         headers[k] = v
 
     try:
-        asyncio.run(run_proxy(args.server_url, headers=headers))
+        asyncio.run(run_proxy(args.server_url, headers=headers, transport=args.transport))
     except KeyboardInterrupt:
         # Clean exit.
         return

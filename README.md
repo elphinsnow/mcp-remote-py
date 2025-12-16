@@ -67,6 +67,16 @@ pip install -e .
 mcp-remote-py http://127.0.0.1:8080/mcp/sse
 ```
 
+Transport strategy (Node `mcp-remote`와 유사):
+
+```bash
+# default: http-first
+mcp-remote-py http://127.0.0.1:8080/mcp/sse --transport http-first
+
+# force SSE-only (서버가 HTTP transport를 지원하지 않을 때)
+mcp-remote-py http://127.0.0.1:8080/mcp/sse --transport sse-only
+```
+
 Custom headers:
 
 ```bash
