@@ -58,8 +58,26 @@ async def run_proxy(
     async def pump_local_to_remote() -> None:
         try:
             async for msg in iter_stdin_messages():
-                # Forward as-is.
-                await remote.send(msg)
+                # Forward as-is with error handling.
+                try:
+                    await remote.send(msg)
+                except Exception as e:
+                    # Log send errors but don't terminate the pump unless transport is closed.
+                    if remote._closed:
+                        log("Remote transport closed, stopping local->remote pump")
+                        return
+                    log("Error sending to remote (will continue):", e)
+                    # For JSON-RPC requests, we should send an error response back
+                    if "id" in msg and msg.get("id") is not None:
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "id": msg["id"],
+                            "error": {
+                                "code": -32603,
+                                "message": f"Transport error: {e}",
+                            },
+                        }
+                        await write_stdout_message(error_response)
         finally:
             local_eof.set()
 

@@ -12,6 +12,10 @@ from .sse_transport import _is_jsonrpc_message, iter_sse_events
 
 JsonObject = Dict[str, Any]
 
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY_BASE = 1.0  # seconds
+
 
 class StreamableHttpRemoteTransport:
     """Very small HTTP transport for MCP JSON-RPC.
@@ -40,45 +44,88 @@ class StreamableHttpRemoteTransport:
     async def wait_ready(self) -> None:
         await self._started.wait()
 
+    def _create_connector(self) -> aiohttp.TCPConnector:
+        """Create a TCP connector with keepalive enabled."""
+        return aiohttp.TCPConnector(
+            keepalive_timeout=60,  # Keep connections alive for 60 seconds
+            enable_cleanup_closed=True,
+            force_close=False,
+        )
+
     async def start(self) -> None:
         if self._session is not None:
             raise RuntimeError("StreamableHttpRemoteTransport already started")
 
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(connector=self._create_connector())
         self._started.set()
 
         # Keep the start() task alive until close().
         await self._closed_event.wait()
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        """Ensure we have a valid session, recreating if needed."""
+        if self._session is None or self._session.closed:
+            if self._closed:
+                raise RuntimeError("Transport is closed")
+            log("Recreating HTTP session")
+            self._session = aiohttp.ClientSession(connector=self._create_connector())
+        return self._session
 
     async def send(self, message: JsonObject) -> None:
         if self._closed:
             raise RuntimeError("Transport is closed")
 
         await self._started.wait()
-        if not self._session:
-            raise RuntimeError("Transport not started")
 
-        try:
-            async with self._session.post(
-                self._url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, application/x-ndjson, application/jsonl, text/event-stream",
-                    **self._headers,
-                },
-                data=json.dumps(message, separators=(",", ":")),
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=None),
-            ) as resp:
-                if resp.status < 200 or resp.status >= 300:
-                    text = await resp.text()
-                    raise RuntimeError(f"HTTP POST failed (HTTP {resp.status}): {text}")
+        last_error: Optional[Exception] = None
 
-                await self._drain_response(resp)
+        for attempt in range(MAX_RETRIES):
+            try:
+                session = await self._ensure_session()
 
-        except Exception as e:
+                async with session.post(
+                    self._url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, application/x-ndjson, application/jsonl, text/event-stream",
+                        **self._headers,
+                    },
+                    data=json.dumps(message, separators=(",", ":")),
+                    timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=None),
+                ) as resp:
+                    if resp.status < 200 or resp.status >= 300:
+                        text = await resp.text()
+                        raise RuntimeError(f"HTTP POST failed (HTTP {resp.status}): {text}")
+
+                    await self._drain_response(resp)
+                    return  # Success
+
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+                last_error = e
+                if self._closed:
+                    break
+
+                # Retryable error
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAY_BASE * (2 ** attempt)
+                    log(f"HTTP request failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                    # Close and recreate session on connection errors
+                    if self._session and not self._session.closed:
+                        await self._session.close()
+                        self._session = None
+                else:
+                    log(f"HTTP request failed after {MAX_RETRIES} attempts: {e}")
+
+            except Exception as e:
+                # Non-retryable error
+                last_error = e
+                break
+
+        if last_error:
             if self.onerror:
-                self.onerror(e)
-            raise
+                self.onerror(last_error)
+            raise last_error
 
     async def _drain_response(self, resp: aiohttp.ClientResponse) -> None:
         """Parse JSON or JSONL from response and forward JSON-RPC messages."""

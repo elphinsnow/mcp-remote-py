@@ -56,42 +56,60 @@ async def iter_sse_events(content: aiohttp.StreamReader) -> AsyncIterator[SseEve
     - event: <name>
     - data: <line> (may repeat; joined with '\n')
     - blank line dispatches event
+
+    Uses chunk-based parsing to handle large payloads that exceed
+    aiohttp's default readline() buffer limit (~64KB).
     """
 
     event_name: str = "message"
     data_lines: list[str] = []
+    buffer = b""
 
     while True:
-        raw = await content.readline()
-        if raw == b"":
-            # EOF
+        # Read chunks instead of lines to avoid buffer size limits
+        try:
+            chunk = await content.read(65536)  # 64KB chunks
+        except Exception:
+            chunk = b""
+
+        if not chunk:
+            # EOF - process any remaining buffer
+            if buffer:
+                line = buffer.decode("utf-8", errors="replace").rstrip("\r\n")
+                if line.startswith("data:"):
+                    data_lines.append(line[len("data:"):].lstrip())
             if data_lines:
                 yield SseEvent(event=event_name, data="\n".join(data_lines))
             return
 
-        line = raw.decode("utf-8", errors="replace")
-        line = line.rstrip("\r\n")
+        buffer += chunk
 
-        if line == "":
-            if data_lines:
-                yield SseEvent(event=event_name, data="\n".join(data_lines))
-            event_name = "message"
-            data_lines = []
-            continue
+        # Process complete lines from buffer
+        while b"\n" in buffer:
+            line_bytes, buffer = buffer.split(b"\n", 1)
+            line = line_bytes.decode("utf-8", errors="replace").rstrip("\r")
 
-        if line.startswith(":"):
-            # comment
-            continue
+            if line == "":
+                # Blank line dispatches event
+                if data_lines:
+                    yield SseEvent(event=event_name, data="\n".join(data_lines))
+                event_name = "message"
+                data_lines = []
+                continue
 
-        if line.startswith("event:"):
-            event_name = line[len("event:") :].strip() or "message"
-            continue
+            if line.startswith(":"):
+                # comment
+                continue
 
-        if line.startswith("data:"):
-            data_lines.append(line[len("data:") :].lstrip())
-            continue
+            if line.startswith("event:"):
+                event_name = line[len("event:"):].strip() or "message"
+                continue
 
-        # ignore other fields (id:, retry:, etc.)
+            if line.startswith("data:"):
+                data_lines.append(line[len("data:"):].lstrip())
+                continue
+
+            # ignore other fields (id:, retry:, etc.)
 
 
 class SseRemoteTransport:
@@ -221,21 +239,44 @@ class SseRemoteTransport:
         if not self._endpoint:
             raise RuntimeError("Not connected (no endpoint)")
 
-        try:
-            async with self._session.post(
-                self._endpoint,
-                headers={"Content-Type": "application/json", **self._headers},
-                data=json.dumps(message, separators=(",", ":")),
-            ) as resp:
-                if resp.status < 200 or resp.status >= 300:
-                    text = await resp.text()
-                    raise RuntimeError(f"POST failed (HTTP {resp.status}): {text}")
-                # Drain/close
-                await resp.release()
-        except Exception as e:
+        max_retries = 3
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                async with self._session.post(
+                    self._endpoint,
+                    headers={"Content-Type": "application/json", **self._headers},
+                    data=json.dumps(message, separators=(",", ":")),
+                    timeout=aiohttp.ClientTimeout(total=60, sock_connect=30),
+                ) as resp:
+                    if resp.status < 200 or resp.status >= 300:
+                        text = await resp.text()
+                        raise RuntimeError(f"POST failed (HTTP {resp.status}): {text}")
+                    # Drain/close
+                    await resp.release()
+                    return  # Success
+
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+                last_error = e
+                if self._closed:
+                    break
+
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    log(f"SSE POST failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    log(f"SSE POST failed after {max_retries} attempts: {e}")
+
+            except Exception as e:
+                last_error = e
+                break
+
+        if last_error:
             if self.onerror:
-                self.onerror(e)
-            raise
+                self.onerror(last_error)
+            raise last_error
 
     async def close(self) -> None:
         if self._closed:
