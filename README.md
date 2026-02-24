@@ -68,23 +68,23 @@ pip install -e .
 ## Run
 
 ```bash
-mcp-remote-py http://127.0.0.1:8080/mcp/sse
+mcp-remote-py http://127.0.0.1:8080/mcp
 ```
 
 Transport strategy (Node `mcp-remote`와 유사):
 
 ```bash
 # default: http-first
-mcp-remote-py http://127.0.0.1:8080/mcp/sse --transport http-first
+mcp-remote-py http://127.0.0.1:8080/mcp --transport http-first
 
 # force SSE-only (서버가 HTTP transport를 지원하지 않을 때)
-mcp-remote-py http://127.0.0.1:8080/mcp/sse --transport sse-only
+mcp-remote-py http://127.0.0.1:8080/mcp --transport sse-only
 ```
 
 Custom headers:
 
 ```bash
-mcp-remote-py http://127.0.0.1:8080/mcp/sse \
+mcp-remote-py http://127.0.0.1:8080/mcp \
 	--header 'Authorization: Bearer TOKEN'
 ```
 
@@ -97,7 +97,7 @@ Codex expects TOML like this:
 ```toml
 [mcp_servers.ida-remote]
 command = "/Users/<you>/.local/bin/mcp-remote-py"
-args = ["http://127.0.0.1:8080/mcp/sse"]
+args = ["http://127.0.0.1:8080/mcp"]
 ```
 
 If you installed via `uv` into `~/.local/bin`, `command` is typically:
@@ -113,7 +113,7 @@ command = "/Users/<you>/.local/bin/mcp-remote-py"
   "mcpServers": {
     "ida-remote": {
       "command": "mcp-remote-py",
-      "args": ["http://127.0.0.1:8080/mcp/sse"]
+      "args": ["http://127.0.0.1:8080/mcp"]
     }
   }
 }
@@ -126,7 +126,7 @@ command = "/Users/<you>/.local/bin/mcp-remote-py"
   "mcpServers": {
     "ida-remote": {
       "command": "mcp-remote-py",
-      "args": ["http://127.0.0.1:8080/mcp/sse"]
+      "args": ["http://127.0.0.1:8080/mcp"]
     }
   }
 }
@@ -139,7 +139,7 @@ command = "/Users/<you>/.local/bin/mcp-remote-py"
   "mcpServers": {
     "ida-remote": {
       "command": "mcp-remote-py",
-      "args": ["http://127.0.0.1:8080/mcp/sse"]
+      "args": ["http://127.0.0.1:8080/mcp"]
     }
   }
 }
