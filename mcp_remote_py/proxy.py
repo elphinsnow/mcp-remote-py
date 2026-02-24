@@ -53,11 +53,33 @@ async def run_proxy(
                 msg = await asyncio.wait_for(remote_to_local_queue.get(), timeout=0.25)
             except asyncio.TimeoutError:
                 continue
+                
+            # Intercept response to rewrite protocol version back to what client expects
+            if _original_protocol_version and isinstance(msg, dict):
+                result = msg.get("result")
+                if isinstance(result, dict) and "protocolVersion" in result:
+                    result["protocolVersion"] = _original_protocol_version
+                    
             await write_stdout_message(msg)
 
+    # State for protocol version rewriting
+    _original_protocol_version: Optional[str] = None
+
     async def pump_local_to_remote() -> None:
+        nonlocal _original_protocol_version
         try:
             async for msg in iter_stdin_messages():
+                # Intercept 'initialize' request to rewrite protocol version
+                if isinstance(msg, dict) and msg.get("method") == "initialize":
+                    params = msg.get("params")
+                    if isinstance(params, dict):
+                        client_version = params.get("protocolVersion")
+                        # Always capture the original version so we can rewrite the response
+                        if client_version:
+                            _original_protocol_version = client_version
+                            # Rewrite to 2025-11-25 to appease FastMCP constraint
+                            params["protocolVersion"] = "2025-11-25"
+
                 # Forward as-is with error handling.
                 try:
                     await remote.send(msg)

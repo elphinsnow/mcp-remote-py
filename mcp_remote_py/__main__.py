@@ -23,9 +23,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--transport",
+        choices=["http-first", "sse-first", "http-only", "sse-only"],
         default="http-first",
-        choices=["sse-only", "http-only", "sse-first", "http-first"],
-        help="Transport strategy (default: http-first)",
+        help="Transport strategy (default: sse-first)",
     )
     return p
 

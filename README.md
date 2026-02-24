@@ -11,15 +11,19 @@ This project is a deliberately small reimplementation of the core idea from `mcp
 ## What this is / isn’t
 
 **Included**
+
 - Bidirectional proxying of MCP JSON-RPC messages
 - No stdout contamination (logs go to stderr)
 - Optional custom headers (`--header 'Name: value'`)
+- **Stateful HTTP Support**: Handles FastMCP's "streamable-http" by persisting `mcp-session-id`.
+- **Protocol Version Hijacking**: Transparently rewrites protocol versions (e.g., handles clients on `2025-06-18` vs strict servers on `2025-11-25`).
 
 **Intentionally excluded** (keep it simple)
+
 - OAuth / authorization flows
 - Token storage / refresh
 - Multi-instance coordination / lockfiles
-- HTTP↔SSE fallback strategies
+- Automated HTTP↔SSE fallback (manual strategy selection via `--transport`)
 
 ## Install
 
@@ -106,12 +110,12 @@ command = "/Users/<you>/.local/bin/mcp-remote-py"
 
 ```json
 {
-	"mcpServers": {
-		"ida-remote": {
-			"command": "mcp-remote-py",
-			"args": ["http://127.0.0.1:8080/mcp/sse"]
-		}
-	}
+  "mcpServers": {
+    "ida-remote": {
+      "command": "mcp-remote-py",
+      "args": ["http://127.0.0.1:8080/mcp/sse"]
+    }
+  }
 }
 ```
 
@@ -119,12 +123,12 @@ command = "/Users/<you>/.local/bin/mcp-remote-py"
 
 ```json
 {
-	"mcpServers": {
-		"ida-remote": {
-			"command": "mcp-remote-py",
-			"args": ["http://127.0.0.1:8080/mcp/sse"]
-		}
-	}
+  "mcpServers": {
+    "ida-remote": {
+      "command": "mcp-remote-py",
+      "args": ["http://127.0.0.1:8080/mcp/sse"]
+    }
+  }
 }
 ```
 
@@ -132,12 +136,12 @@ command = "/Users/<you>/.local/bin/mcp-remote-py"
 
 ```json
 {
-	"mcpServers": {
-		"ida-remote": {
-			"command": "mcp-remote-py",
-			"args": ["http://127.0.0.1:8080/mcp/sse"]
-		}
-	}
+  "mcpServers": {
+    "ida-remote": {
+      "command": "mcp-remote-py",
+      "args": ["http://127.0.0.1:8080/mcp/sse"]
+    }
+  }
 }
 ```
 

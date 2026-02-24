@@ -32,6 +32,8 @@ class StreamableHttpRemoteTransport:
         self._headers = headers or {}
 
         self._session: Optional[aiohttp.ClientSession] = None
+        self._mcp_session_id: Optional[str] = None
+        self._mcp_protocol_version: Optional[str] = None
         self._closed = False
         self._started = asyncio.Event()
         self._closed_event = asyncio.Event()
@@ -83,19 +85,31 @@ class StreamableHttpRemoteTransport:
             try:
                 session = await self._ensure_session()
 
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, application/x-ndjson, application/jsonl, text/event-stream",
+                    **self._headers,
+                }
+                
+                if self._mcp_session_id:
+                    headers["mcp-session-id"] = self._mcp_session_id
+                if self._mcp_protocol_version:
+                    headers["mcp-protocol-version"] = self._mcp_protocol_version
+
                 async with session.post(
                     self._url,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, application/x-ndjson, application/jsonl, text/event-stream",
-                        **self._headers,
-                    },
+                    headers=headers,
                     data=json.dumps(message, separators=(",", ":")),
                     timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=None),
                 ) as resp:
                     if resp.status < 200 or resp.status >= 300:
                         text = await resp.text()
                         raise RuntimeError(f"HTTP POST failed (HTTP {resp.status}): {text}")
+
+                    # Extract mcp-session-id from response headers if present and not set
+                    session_id = resp.headers.get("mcp-session-id")
+                    if session_id and not self._mcp_session_id:
+                        self._mcp_session_id = session_id
 
                     await self._drain_response(resp)
                     return  # Success
@@ -187,6 +201,12 @@ class StreamableHttpRemoteTransport:
     def _handle_message_obj(self, obj: object) -> None:
         if not _is_jsonrpc_message(obj):
             return
+            
+        # Extract protocolVersion from initialize response
+        if isinstance(obj, dict) and "result" in obj and isinstance(obj["result"], dict):
+            if "protocolVersion" in obj["result"] and not self._mcp_protocol_version:
+                self._mcp_protocol_version = obj["result"]["protocolVersion"]
+
         if self.onmessage:
             self.onmessage(obj)  # type: ignore[arg-type]
 
